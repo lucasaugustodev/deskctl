@@ -13,8 +13,8 @@ AI Agent (Claude Code, Cline, Cursor)
   ├── deskctl bg-type "hello"          ← native apps (Notepad, Excel)
   │     PostMessage WM_CHAR              (no mouse, no focus)
   │
-  ├── deskctl figma ...                ← Figma (via daemon + Plugin API)
-  │     figma.createFrame(), figma.createText()...
+  ├── deskctl figma info               ← Figma (auto-managed daemon)
+  │     Plugin API: create, edit, read    (automatic, just have file open)
   │
   └── deskctl screenshot --app notepad ← any app
         PrintWindow                      (no focus needed)
@@ -26,17 +26,29 @@ AI Agent (Claude Code, Cline, Cursor)
 git clone https://github.com/lucasaugustodev/deskctl.git
 cd deskctl
 
-# Build
+# Build CLI
 go build -o deskctl.exe .
 
 # Python deps (for bg-* native commands)
 pip install pywinauto uiautomation Pillow
 
-# native-devtools-mcp (for screenshot/OCR/find commands)
-npm install -g native-devtools-mcp
-
 # Node deps (for Figma bridge)
 npm install
+
+# Screenshot/OCR engine
+npm install -g native-devtools-mcp
+
+# Figma support: clone figma-cli next to deskctl
+cd .. && git clone https://github.com/silships/figma-cli.git
+cd figma-cli && npm install && cd ../deskctl
+```
+
+Directory layout after install:
+
+```
+your-folder/
+├── deskctl/        ← this repo
+└── figma-cli/      ← required for Figma commands
 ```
 
 ## Quick Start
@@ -57,82 +69,43 @@ deskctl bg-type "Hello World"
 deskctl bg-key "ctrl+s"
 ```
 
-## Figma (Plugin API via daemon)
+## Figma
 
-deskctl controls Figma Desktop through its Plugin API — create frames, text, edit elements, read the tree.
-
-**Requirement:** Figma must have a design file open. The figma-cli daemon connects to the Plugin API sandbox which only exists when a design file is loaded.
-
-### Setup (one time)
+Controls Figma Desktop via Plugin API. **Just have a design file open — everything else is automatic.**
 
 ```bash
-# 1. Clone figma-cli (provides the daemon + Figma patcher)
-git clone https://github.com/silships/figma-cli.git
-cd figma-cli && npm install && cd ..
+# Check connection (auto-starts daemon if needed)
+deskctl figma info
+# → {"page":"My Page","children":10,"fileKey":"abc123"}
 
-# 2. Patch Figma to enable CDP (or use: deskctl patch Figma)
-cd figma-cli && node src/index.js connect
-# This patches app.asar, restarts Figma, and starts the speed daemon
+# Element tree
+deskctl figma tree
+deskctl figma tree --depth 4
+
+# Create elements
+deskctl figma create-frame "Slide-10" --x 10620 --y 0 --w 1080 --h 1350 --fill "#0D0D12"
+deskctl figma create-text "HELLO WORLD" --x 60 --y 950 --size 72 --font "Inter" --style "Bold" --fill "#FFFFFF" --parent "64:2"
+
+# Edit elements
+deskctl figma set-text "34:20" "New Title"
+deskctl figma move "34:43" --y 874
+deskctl figma delete "64:7"
+
+# Run any Plugin API code
+deskctl figma eval "figma.currentPage.name"
+deskctl figma eval "figma.currentPage.children.map(c => c.name)"
 ```
 
-### Before each session
+**How it works:** deskctl auto-detects if Figma is running, checks if the figma-cli daemon is alive, starts it if needed, and routes commands through it. The daemon connects to Figma's Plugin API sandbox via CDP.
 
-```
-1. Open Figma Desktop
-2. Open a design file (e.g. click on a project)
-3. Start the daemon:
-   cd figma-cli && DAEMON_PORT=3456 DAEMON_MODE=auto node src/daemon.js &
-4. deskctl is ready to control Figma
-```
-
-**Important:** The `figma` Plugin API only exists when a design file is open and loaded. If Figma shows the home/feed/recents page, the daemon will report "Could not find Figma execution context." Open any design file to fix this.
-
-### Figma commands via bridge
-
-```bash
-# Read canvas info
-echo '{"cmd":"canvas-info"}' | node figma/bridge.mjs
-
-# Get element tree
-echo '{"cmd":"tree","depth":2}' | node figma/bridge.mjs
-
-# Create a frame
-echo '{"cmd":"create-frame","name":"MyFrame","x":0,"y":0,"w":1080,"h":1350,"fill":"#0D0D12"}' | node figma/bridge.mjs
-
-# Create text
-echo '{"cmd":"create-text","text":"Hello","x":60,"y":950,"size":72,"font":"Inter","style":"Bold","fill":"#FFFFFF","parent":"64:2"}' | node figma/bridge.mjs
-
-# Edit text
-echo '{"cmd":"set-text","id":"34:20","text":"New Title"}' | node figma/bridge.mjs
-
-# Move element
-echo '{"cmd":"move","id":"34:43","y":874}' | node figma/bridge.mjs
-
-# Delete element
-echo '{"cmd":"delete","id":"64:2"}' | node figma/bridge.mjs
-
-# Run arbitrary Plugin API code
-echo '{"cmd":"eval","code":"figma.currentPage.children.length"}' | node figma/bridge.mjs
-```
-
-### Direct daemon calls (without bridge)
-
-```bash
-TOKEN=$(cat ~/.figma-ds-cli/.daemon-token)
-
-# Health check
-curl -s http://localhost:3456/health -H "X-Daemon-Token: $TOKEN"
-
-# Eval Plugin API
-curl -s -X POST http://localhost:3456/exec \
-  -H "Content-Type: application/json" \
-  -H "X-Daemon-Token: $TOKEN" \
-  -d '{"action":"eval","code":"figma.currentPage.name"}'
-```
+**Requirements:**
+- Figma Desktop open with a design file loaded (not the home/feed page)
+- figma-cli cloned next to deskctl (see Install)
+- First time only: deskctl patches Figma's `app.asar` to enable CDP (backup created automatically)
 
 ## CDP Commands (Web Apps, Electron, WebView2)
 
-Works with any Chromium-based app: **Chrome, Edge, LinkedIn PWA, Discord, Slack, VS Code, etc.**
+Works with any Chromium-based app: **LinkedIn PWA, Chrome, Edge, Discord, Slack, VS Code, etc.**
 
 Zero mouse movement — uses `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent`.
 
@@ -155,16 +128,13 @@ deskctl cdp-type 9345 "Hello World"
 # Fill input field
 deskctl cdp-fill 9345 "input[name=search]" "query"
 
-# Screenshot via CDP
-deskctl cdp-screenshot 9345
-
 # Target specific page
 deskctl cdp-eval 9222 "document.title" --page "Untitled"
 ```
 
 ### CDP Session (persistent connection)
 
-For multi-step workflows, `cdp-session` keeps the WebSocket alive:
+For multi-step workflows — keeps WebSocket alive between commands:
 
 ```bash
 echo '{"cmd":"nav","url":"https://www.linkedin.com/feed/"}
@@ -215,8 +185,6 @@ deskctl detect Figma    # → {"type":"electron","exe":"..."}
 deskctl patch Figma     # patches app.asar (backup created)
 ```
 
-The patch: `removeSwitch("remote-debugging-port")` → `removeSwitch("remote-debugXing-port")`.
-
 ## Finding Debug Ports
 
 | App Type | How to find |
@@ -224,38 +192,47 @@ The patch: `removeSwitch("remote-debugging-port")` → `removeSwitch("remote-deb
 | **WebView2 PWAs** (LinkedIn, WhatsApp) | `deskctl detect LinkedIn` — auto-discovers |
 | **Electron** (Figma, Discord) | `deskctl patch <app>` then relaunch |
 | **Chrome/Edge** | Launch with `--remote-debugging-port=9222` |
+| **Figma** | Automatic — `deskctl figma` handles everything |
 
 ## How AI Agents Use It
 
 Any AI agent calls deskctl via shell:
 
 ```bash
-# Read a web page
-deskctl cdp-eval 9345 "document.body.innerText.slice(0, 2000)"
+# Figma: create a new slide
+deskctl figma create-frame "NewSlide" --x 5000 --w 1080 --h 1350
+deskctl figma create-text "Title" --size 72 --parent "64:2"
 
-# Native app interaction
-deskctl bg-target "Excel"
-deskctl bg-key "ctrl+s"
+# LinkedIn: read feed and comment
+echo '{"cmd":"nav","url":"https://www.linkedin.com/feed/"}
+{"cmd":"wait","ms":3000}
+{"cmd":"eval","js":"document.body.innerText.slice(0,1000)"}
+{"cmd":"click_text","text":"Comentar"}
+{"cmd":"type","text":"Great post!"}' | deskctl cdp-session 9345
 
-# Figma automation
-echo '{"cmd":"canvas-info"}' | node figma/bridge.mjs
-echo '{"cmd":"create-text","text":"Hello","x":60,"y":100,"parent":"1:2"}' | node figma/bridge.mjs
+# Native app: type in Notepad
+deskctl bg-target "Notepad"
+deskctl bg-key "ctrl+a"
+deskctl bg-type "Hello from AI agent"
 
-# Multi-step with validation
-echo '{"cmd":"nav","url":"https://example.com"}
-{"cmd":"verify","js":"document.title.includes(\"Example\")"}
-{"cmd":"click","selector":"#login-btn"}
-{"cmd":"fill","selector":"#email","value":"user@test.com"}' | deskctl cdp-session 9222
+# Screenshot + OCR
+deskctl screenshot --app notepad.exe
+deskctl find "Save" --app Notepad
 ```
 
 ## Architecture
 
 ```
 deskctl.exe (Go)
+│
 ├── pkg/cdp/        Pure Go CDP client (WebSocket)
 │                   Input.dispatchMouseEvent (click without mouse)
 │                   Input.dispatchKeyEvent (type without focus)
 │                   Runtime.evaluate (run JS)
+│
+├── pkg/figma/      Auto-managed Figma engine
+│                   Detects Figma → starts daemon → connects
+│                   Full Plugin API via figma-cli daemon
 │
 ├── pkg/bridge/     Python bridge (PostMessage for native apps)
 │                   WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN
@@ -266,21 +243,21 @@ deskctl.exe (Go)
 │
 ├── pkg/ndmcp/      native-devtools-mcp (screenshot, OCR, find_text)
 │
-└── figma/          Figma bridge (Node.js → daemon HTTP)
-                    figma-cli speed daemon on port 3456
-                    Full Plugin API: create, edit, delete, read
+├── bridge/         Python PostMessage backend
+│
+└── figma/          Node.js Figma bridge (alternative to Go engine)
 ```
 
-## Tested Apps
+## Tested
 
-| App | Method | Background | No Mouse | Notes |
-|-----|--------|-----------|----------|-------|
-| LinkedIn PWA | CDP (port 9345) | yes | yes | WebView2, auto-discovered |
-| Figma Desktop | Plugin API (daemon) | yes | yes | Requires design file open |
-| Notepad | PostMessage | yes | yes | Any Win32 app works |
-| Chrome/Edge | CDP | yes | yes | Launch with --remote-debugging-port |
-| Any Electron | CDP (after patch) | yes | yes | deskctl patch <app> |
-| Any WebView2 PWA | CDP (auto-discover) | yes | yes | deskctl detect <app> |
+| App | Method | Command | No Mouse | No Focus |
+|-----|--------|---------|----------|----------|
+| Figma | Plugin API (auto-daemon) | `deskctl figma ...` | yes | yes |
+| LinkedIn PWA | CDP (port 9345) | `deskctl cdp-session 9345` | yes | yes |
+| Notepad | PostMessage | `deskctl bg-type "..."` | yes | yes |
+| Chrome/Edge | CDP | `deskctl cdp-eval 9222 "..."` | yes | yes |
+| Any Electron | CDP (after patch) | `deskctl patch <app>` | yes | yes |
+| Any WebView2 | CDP (auto-discover) | `deskctl detect <app>` | yes | yes |
 
 ## License
 
