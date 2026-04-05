@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"time"
+
 	"deskctl/pkg/bridge"
 	cdpPkg "deskctl/pkg/cdp"
 	"deskctl/pkg/connector"
@@ -131,10 +133,11 @@ func main() {
 		defer c.Close()
 		printTool(c.Call("focus_window", map[string]any{"app_name": strings.Join(rest, " ")}))
 
-	// ── CDP commands (pure Go, connects to any Electron/WebView2/browser) ──
+	// ── CDP commands (pure Go, all use stripFlags to avoid arg contamination) ──
 	case "cdp-list":
-		requireArgs(rest, 1, "cdp-list <port>")
-		port, _ := strconv.Atoi(rest[0])
+		p := stripFlags(rest)
+		requireArgs(p, 1, "cdp-list <port>")
+		port, _ := strconv.Atoi(p[0])
 		targets, err := cdpPkg.ListTargets(port)
 		fatal(err)
 		for i, t := range targets {
@@ -143,25 +146,12 @@ func main() {
 			}
 		}
 
-	case "cdp-open":
-		requireArgs(rest, 1, "cdp-open <port> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		if match == "" { match = "" }
-		client, target, err := cdpPkg.ConnectToApp(port, match)
-		fatal(err)
-		defer client.Close()
-		fmt.Printf("Connected to: %s\n  URL: %s\n", target.Title, target.URL)
-		title, _ := client.Eval("document.title")
-		fmt.Printf("  document.title: %s\n", title)
-
 	case "cdp-eval":
-		requireArgs(rest, 2, "cdp-eval <port> <js> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		pos := stripFlags(rest)
-		js := strings.Join(pos[1:], " ")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 2, "cdp-eval <port> <js>")
+		port, _ := strconv.Atoi(p[0])
+		js := strings.Join(p[1:], " ")
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
 		result, err := client.Eval(js)
@@ -169,76 +159,83 @@ func main() {
 		fmt.Println(result)
 
 	case "cdp-nav":
-		requireArgs(rest, 2, "cdp-nav <port> <url> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 2, "cdp-nav <port> <url>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
-		fatal(client.Navigate(rest[1]))
-		fmt.Println("Navigated to", rest[1])
+		fatal(client.Navigate(p[1]))
+		fmt.Println("OK")
 
 	case "cdp-click":
-		requireArgs(rest, 2, "cdp-click <port> <selector> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 2, "cdp-click <port> <selector>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
-		fatal(client.ClickSelector(rest[1]))
-		fmt.Println("Clicked", rest[1])
+		fatal(client.ClickSelector(p[1]))
+		fmt.Println("OK")
 
 	case "cdp-fill":
-		requireArgs(rest, 3, "cdp-fill <port> <selector> <value> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 3, "cdp-fill <port> <selector> <value>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
-		fatal(client.Fill(rest[1], strings.Join(rest[2:], " ")))
-		fmt.Println("Filled", rest[1])
+		fatal(client.Fill(p[1], strings.Join(p[2:], " ")))
+		fmt.Println("OK")
 
 	case "cdp-type":
-		requireArgs(rest, 2, "cdp-type <port> <text> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 2, "cdp-type <port> <text>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
-		fatal(client.Type(strings.Join(rest[1:], " ")))
-		fmt.Println("Typed")
+		fatal(client.Type(strings.Join(p[1:], " ")))
+		fmt.Println("OK")
 
 	case "cdp-key":
-		requireArgs(rest, 2, "cdp-key <port> <key> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 2, "cdp-key <port> <key>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
-		fatal(client.PressKey(rest[1]))
-		fmt.Println("Pressed", rest[1])
+		fatal(client.PressKey(p[1]))
+		fmt.Println("OK")
 
 	case "cdp-screenshot":
-		requireArgs(rest, 1, "cdp-screenshot <port> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 1, "cdp-screenshot <port>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
 		data, err := client.Screenshot()
 		fatal(err)
-		fmt.Printf("[screenshot: %d bytes base64]\n", len(data))
+		fmt.Printf("[screenshot: %d bytes]\n", len(data))
 
 	case "cdp-snap":
-		requireArgs(rest, 1, "cdp-snap <port> [--page MATCH]")
-		port, _ := strconv.Atoi(rest[0])
-		match := flag(rest, "--page")
-		client, _, err := cdpPkg.ConnectToApp(port, match)
+		p := stripFlags(rest)
+		requireArgs(p, 1, "cdp-snap <port>")
+		port, _ := strconv.Atoi(p[0])
+		client, _, err := cdpPkg.ConnectToApp(port, flag(rest, "--page"))
 		fatal(err)
 		defer client.Close()
 		snap, err := client.Snapshot()
 		fatal(err)
 		fmt.Println(snap)
+
+	// ── CDP Session (persistent connection, JSON commands via stdin) ──
+	case "cdp-session":
+		p := stripFlags(rest)
+		requireArgs(p, 1, "cdp-session <port> [--page MATCH]")
+		port, _ := strconv.Atoi(p[0])
+		runCDPSession(port, flag(rest, "--page"))
 
 	// ── Background native (PostMessage, no mouse, no focus) ──
 	case "bg-target":
@@ -301,7 +298,141 @@ func main() {
 	}
 }
 
-// ── Session mode: reads commands from stdin, keeps ndmcp alive ──
+// ── CDP Session: persistent connection, JSON commands via stdin ──
+// Input: {"cmd":"eval","js":"document.title"}
+// Input: {"cmd":"nav","url":"https://..."}
+// Input: {"cmd":"click","selector":"button.submit"}
+// Input: {"cmd":"click_text","text":"Comentar"}
+// Input: {"cmd":"type","text":"hello world"}
+// Input: {"cmd":"key","key":"Enter"}
+// Input: {"cmd":"fill","selector":"input","value":"text"}
+// Input: {"cmd":"screenshot"}
+// Input: {"cmd":"wait","ms":2000}
+// Input: {"cmd":"verify","js":"document.querySelector('.editor') !== null"}
+// Output: {"ok":true,"result":"..."} or {"ok":false,"error":"..."}
+func runCDPSession(port int, pageMatch string) {
+	client, target, err := cdpPkg.ConnectToApp(port, pageMatch)
+	if err != nil {
+		fmt.Printf(`{"ok":false,"error":"connect: %s"}`+"\n", err)
+		os.Exit(1)
+	}
+	defer client.Close()
+	fmt.Fprintf(os.Stderr, "cdp-session: connected to %s (%s)\n", target.Title, target.URL)
+
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if line == "exit" || line == "quit" {
+			break
+		}
+
+		var cmd struct {
+			Cmd      string `json:"cmd"`
+			JS       string `json:"js,omitempty"`
+			URL      string `json:"url,omitempty"`
+			Selector string `json:"selector,omitempty"`
+			Text     string `json:"text,omitempty"`
+			Value    string `json:"value,omitempty"`
+			Key      string `json:"key,omitempty"`
+			Ms       int    `json:"ms,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(line), &cmd); err != nil {
+			fmt.Printf(`{"ok":false,"error":"bad json: %s"}`+"\n", err)
+			continue
+		}
+
+		var result string
+		var cmdErr error
+
+		switch cmd.Cmd {
+		case "eval":
+			result, cmdErr = client.Eval(cmd.JS)
+
+		case "nav", "navigate":
+			cmdErr = client.Navigate(cmd.URL)
+			if cmdErr == nil {
+				time.Sleep(1 * time.Second)
+				result, _ = client.Eval("document.title")
+			}
+
+		case "click":
+			cmdErr = client.ClickSelector(cmd.Selector)
+
+		case "click_text":
+			// Click first visible element containing text
+			js := fmt.Sprintf(`(function(){
+				var els=document.querySelectorAll('button,a,span,[role=button]');
+				for(var i=0;i<els.length;i++){
+					if(els[i].offsetHeight>0 && (els[i].innerText||'').trim()===%q){
+						var r=els[i].getBoundingClientRect();
+						return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2});
+					}
+				}
+				return 'null';
+			})()`, cmd.Text)
+			var coordStr string
+			coordStr, cmdErr = client.Eval(js)
+			if cmdErr == nil && coordStr != "null" && coordStr != "" {
+				var coords struct{ X, Y float64 }
+				json.Unmarshal([]byte(coordStr), &coords)
+				cmdErr = client.Click(coords.X, coords.Y)
+			} else if cmdErr == nil {
+				cmdErr = fmt.Errorf("element with text %q not found", cmd.Text)
+			}
+
+		case "type":
+			cmdErr = client.Type(cmd.Text)
+
+		case "key":
+			cmdErr = client.PressKey(cmd.Key)
+
+		case "fill":
+			cmdErr = client.Fill(cmd.Selector, cmd.Value)
+
+		case "screenshot":
+			var data string
+			data, cmdErr = client.Screenshot()
+			if cmdErr == nil {
+				result = fmt.Sprintf("%d bytes", len(data))
+			}
+
+		case "wait":
+			ms := cmd.Ms
+			if ms <= 0 { ms = 1000 }
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+			result = fmt.Sprintf("waited %dms", ms)
+
+		case "verify":
+			// Eval JS expression and check if result is truthy
+			result, cmdErr = client.Eval(cmd.JS)
+			if cmdErr == nil && (result == "false" || result == "null" || result == "undefined" || result == "0" || result == "") {
+				cmdErr = fmt.Errorf("verification failed: %s returned %q", cmd.JS, result)
+			}
+
+		default:
+			cmdErr = fmt.Errorf("unknown cmd: %s", cmd.Cmd)
+		}
+
+		if cmdErr != nil {
+			errMsg := strings.ReplaceAll(cmdErr.Error(), `"`, `'`)
+			fmt.Printf(`{"ok":false,"error":"%s"}`+"\n", errMsg)
+		} else {
+			if result == "" {
+				result = "true"
+			}
+			resultJSON, _ := json.Marshal(result)
+			fmt.Printf(`{"ok":true,"result":%s}`+"\n", string(resultJSON))
+		}
+		os.Stdout.Sync()
+	}
+}
+
+// ── Session mode: keeps ndmcp alive for multiple commands ──
 func runSession() {
 	c := startNdmcp()
 	defer c.Close()

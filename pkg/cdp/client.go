@@ -187,8 +187,14 @@ func (c *Client) readLoop() {
 				}
 			}
 		} else if msg.Method != "" {
+			// For notifications, params are in a separate field
+			var notif struct {
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			json.Unmarshal(data, &notif)
 			select {
-			case c.events <- Event{Method: msg.Method, Params: msg.Result}:
+			case c.events <- Event{Method: notif.Method, Params: notif.Params}:
 			default:
 			}
 		}
@@ -197,7 +203,7 @@ func (c *Client) readLoop() {
 
 // ── High-level helpers ──
 
-// Eval executes JavaScript and returns the result value.
+// Eval executes JavaScript and returns the result value as string.
 func (c *Client) Eval(expression string) (string, error) {
 	raw, err := c.Send("Runtime.evaluate", map[string]any{
 		"expression":    expression,
@@ -206,24 +212,40 @@ func (c *Client) Eval(expression string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var result struct {
-		Result struct {
-			Value any    `json:"value"`
-			Type  string `json:"type"`
-		} `json:"result"`
-		Error string `json:"error,omitempty"`
+
+	// Parse the nested result structure
+	var wrapper map[string]json.RawMessage
+	json.Unmarshal(raw, &wrapper)
+
+	// Check for error
+	if errRaw, ok := wrapper["error"]; ok {
+		return "", fmt.Errorf("%s", string(errRaw))
 	}
-	json.Unmarshal(raw, &result)
-	if result.Error != "" {
-		return "", fmt.Errorf("%s", result.Error)
-	}
-	if result.Result.Type == "string" {
-		if s, ok := result.Result.Value.(string); ok {
-			return s, nil
+
+	// Get result.value
+	if resultRaw, ok := wrapper["result"]; ok {
+		var inner map[string]json.RawMessage
+		json.Unmarshal(resultRaw, &inner)
+		if valRaw, ok := inner["value"]; ok {
+			// Try as string first
+			var s string
+			if json.Unmarshal(valRaw, &s) == nil {
+				return s, nil
+			}
+			// Return raw JSON for other types
+			return string(valRaw), nil
+		}
+		if typeRaw, ok := inner["type"]; ok {
+			var t string
+			json.Unmarshal(typeRaw, &t)
+			if t == "undefined" {
+				return "undefined", nil
+			}
 		}
 	}
-	b, _ := json.Marshal(result.Result.Value)
-	return string(b), nil
+
+	// Fallback: return raw
+	return string(raw), nil
 }
 
 // EvalInContext executes JS in a specific execution context.
