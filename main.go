@@ -14,6 +14,7 @@ import (
 	"deskctl/pkg/bridge"
 	cdpPkg "deskctl/pkg/cdp"
 	"deskctl/pkg/connector"
+	"deskctl/pkg/figma"
 	"deskctl/pkg/ndmcp"
 )
 
@@ -287,6 +288,10 @@ func main() {
 		r, _ := b.Send(bridge.Req{Action: "execute_action", Type: "scroll", Dir: dir, Amount: amt})
 		printJSON(r)
 
+	// ── Figma (auto-manages daemon, requires design file open) ──
+	case "figma":
+		runFigma(rest)
+
 	// ── Session mode (keeps ndmcp alive for multiple commands) ──
 	case "session":
 		runSession()
@@ -296,6 +301,132 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+// ── Figma: auto-manages daemon ──
+func runFigma(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, `Usage: deskctl figma <command>
+
+Commands:
+  deskctl figma status                      Check connection
+  deskctl figma info                        Canvas info (page, children count)
+  deskctl figma tree [--depth N]            Element tree
+  deskctl figma eval "figma.currentPage.name"  Run Plugin API code
+  deskctl figma create-frame <name> [--x N] [--y N] [--w N] [--h N] [--fill #hex]
+  deskctl figma create-text <text> [--x N] [--y N] [--size N] [--font F] [--style S] [--fill #hex] [--parent ID]
+  deskctl figma set-text <id> <text>        Edit text content
+  deskctl figma move <id> [--x N] [--y N]   Move element
+  deskctl figma delete <id>                 Delete element
+
+Requires: Figma Desktop open with a design file loaded.`)
+		os.Exit(1)
+	}
+
+	// Auto-start engine (checks Figma, starts daemon if needed)
+	eng, err := figma.Start()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	sub := args[0]
+	rest := args[1:]
+	p := stripFlags(rest)
+
+	switch sub {
+	case "status":
+		fmt.Println("Connected to Figma")
+
+	case "info":
+		r, err := eng.Eval("JSON.stringify({page:figma.currentPage.name,children:figma.currentPage.children.length,fileKey:figma.fileKey})")
+		fatal(err)
+		fmt.Println(r)
+
+	case "tree":
+		depth := 3
+		if v := flag(rest, "--depth"); v != "" {
+			fmt.Sscanf(v, "%d", &depth)
+		}
+		r, err := eng.Eval(fmt.Sprintf(`(function(){function w(n,d,m){var o={name:n.name,type:n.type,id:n.id};if(n.x!==undefined){o.x=Math.round(n.x);o.y=Math.round(n.y)}if(n.width!==undefined){o.w=Math.round(n.width);o.h=Math.round(n.height)}if(n.characters)o.text=n.characters.slice(0,80);if(d<m&&n.children)o.children=n.children.map(function(c){return w(c,d+1,m)});return o}return JSON.stringify(w(figma.currentPage,0,%d))})()`, depth))
+		fatal(err)
+		fmt.Println(r)
+
+	case "eval":
+		requireArgs(p, 1, "figma eval <code>")
+		r, err := eng.Eval(strings.Join(p, " "))
+		fatal(err)
+		fmt.Println(r)
+
+	case "create-frame":
+		name := "Frame"
+		if len(p) > 0 { name = p[0] }
+		x := flag(rest, "--x"); if x == "" { x = "0" }
+		y := flag(rest, "--y"); if y == "" { y = "0" }
+		w := flag(rest, "--w"); if w == "" { w = "1080" }
+		h := flag(rest, "--h"); if h == "" { h = "1350" }
+		fill := flag(rest, "--fill"); if fill == "" { fill = "#0D0D12" }
+		fr := parseFloat(fill[1:3]) / 255; fg := parseFloat(fill[3:5]) / 255; fb := parseFloat(fill[5:7]) / 255
+		code := fmt.Sprintf(`(function(){var f=figma.createFrame();f.name=%q;f.resize(%s,%s);f.x=%s;f.y=%s;f.fills=[{type:"SOLID",color:{r:%f,g:%f,b:%f}}];figma.currentPage.appendChild(f);return JSON.stringify({id:f.id,name:f.name,x:f.x,y:f.y})})()`,
+			name, w, h, x, y, fr, fg, fb)
+		r, err := eng.Eval(code)
+		fatal(err)
+		fmt.Println(r)
+
+	case "create-text":
+		requireArgs(p, 1, "figma create-text <text>")
+		text := p[0]
+		x := flag(rest, "--x"); if x == "" { x = "0" }
+		y := flag(rest, "--y"); if y == "" { y = "0" }
+		size := flag(rest, "--size"); if size == "" { size = "48" }
+		font := flag(rest, "--font"); if font == "" { font = "Inter" }
+		style := flag(rest, "--style"); if style == "" { style = "Bold" }
+		fill := flag(rest, "--fill"); if fill == "" { fill = "#FFFFFF" }
+		parent := flag(rest, "--parent")
+		fr := parseFloat(fill[1:3]) / 255; fg := parseFloat(fill[3:5]) / 255; fb := parseFloat(fill[5:7]) / 255
+		parentCode := ""
+		if parent != "" {
+			parentCode = fmt.Sprintf(`var p=figma.getNodeById(%q);if(p)p.appendChild(t);`, parent)
+		}
+		code := fmt.Sprintf(`(async()=>{await figma.loadFontAsync({family:%q,style:%q});var t=figma.createText();t.fontName={family:%q,style:%q};t.fontSize=%s;t.characters=%q;t.fills=[{type:"SOLID",color:{r:%f,g:%f,b:%f}}];t.x=%s;t.y=%s;%sreturn JSON.stringify({id:t.id,text:t.characters.slice(0,50)})})()`,
+			font, style, font, style, size, text, fr, fg, fb, x, y, parentCode)
+		r, err := eng.Eval(code)
+		fatal(err)
+		fmt.Println(r)
+
+	case "set-text":
+		requireArgs(p, 2, "figma set-text <id> <text>")
+		code := fmt.Sprintf(`(async()=>{var n=figma.getNodeById(%q);if(!n)return JSON.stringify({error:"not found"});await figma.loadFontAsync(n.fontName);n.characters=%q;return JSON.stringify({id:n.id,text:n.characters.slice(0,50)})})()`, p[0], strings.Join(p[1:], " "))
+		r, err := eng.Eval(code)
+		fatal(err)
+		fmt.Println(r)
+
+	case "move":
+		requireArgs(p, 1, "figma move <id> [--x N] [--y N]")
+		xCode := ""; if v := flag(rest, "--x"); v != "" { xCode = fmt.Sprintf("n.x=%s;", v) }
+		yCode := ""; if v := flag(rest, "--y"); v != "" { yCode = fmt.Sprintf("n.y=%s;", v) }
+		code := fmt.Sprintf(`(function(){var n=figma.getNodeById(%q);if(!n)return JSON.stringify({error:"not found"});%s%sreturn JSON.stringify({id:n.id,x:Math.round(n.x),y:Math.round(n.y)})})()`, p[0], xCode, yCode)
+		r, err := eng.Eval(code)
+		fatal(err)
+		fmt.Println(r)
+
+	case "delete":
+		requireArgs(p, 1, "figma delete <id>")
+		code := fmt.Sprintf(`(function(){var n=figma.getNodeById(%q);if(!n)return JSON.stringify({error:"not found"});var nm=n.name;n.remove();return JSON.stringify({deleted:nm})})()`, p[0])
+		r, err := eng.Eval(code)
+		fatal(err)
+		fmt.Println(r)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown figma command: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+func parseFloat(hexPair string) float64 {
+	var n int
+	fmt.Sscanf(hexPair, "%x", &n)
+	return float64(n)
 }
 
 // ── CDP Session: persistent connection, JSON commands via stdin ──
