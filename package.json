@@ -1,0 +1,23 @@
+{
+  "name": "deskctl",
+  "version": "1.0.0",
+  "description": "Desktop control CLI for AI agents. No LLM inside — your AI agent calls the commands directly.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lucasaugustodev/deskctl.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/lucasaugustodev/deskctl/issues"
+  },
+  "homepage": "https://github.com/lucasaugustodev/deskctl#readme",
+  "dependencies": {
+    "ws": "^8.20.0"
+  }
+}
