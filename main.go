@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"deskctl/pkg/bridge"
+	cdpPkg "deskctl/pkg/cdp"
 	"deskctl/pkg/connector"
 	"deskctl/pkg/ndmcp"
 )
@@ -130,66 +131,114 @@ func main() {
 		defer c.Close()
 		printTool(c.Call("focus_window", map[string]any{"app_name": strings.Join(rest, " ")}))
 
-	// ── CDP commands (browsers, Electron, WebView2) ──
-	case "cdp-connect":
-		requireArgs(rest, 1, "cdp-connect <port>")
-		c := startNdmcp()
-		defer c.Close()
+	// ── CDP commands (pure Go, connects to any Electron/WebView2/browser) ──
+	case "cdp-list":
+		requireArgs(rest, 1, "cdp-list <port>")
 		port, _ := strconv.Atoi(rest[0])
-		printTool(c.Call("cdp_connect", map[string]any{"port": port}))
+		targets, err := cdpPkg.ListTargets(port)
+		fatal(err)
+		for i, t := range targets {
+			if t.Type == "page" {
+				fmt.Printf("[%d] %s — %s\n", i, t.Title, t.URL)
+			}
+		}
 
-	case "cdp-pages":
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_list_pages", map[string]any{}))
-
-	case "cdp-select":
-		requireArgs(rest, 1, "cdp-select <index>")
-		c := startNdmcp()
-		defer c.Close()
-		idx, _ := strconv.Atoi(rest[0])
-		printTool(c.Call("cdp_select_page", map[string]any{"page_idx": idx}))
-
-	case "cdp-nav":
-		requireArgs(rest, 1, "cdp-nav <url>")
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_navigate", map[string]any{"url": rest[0]}))
-
-	case "cdp-snap":
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_take_snapshot", map[string]any{}))
-
-	case "cdp-click":
-		requireArgs(rest, 1, "cdp-click <selector>")
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_click", map[string]any{"selector": rest[0]}))
-
-	case "cdp-fill":
-		requireArgs(rest, 2, "cdp-fill <selector> <value>")
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_fill", map[string]any{"selector": rest[0], "value": strings.Join(rest[1:], " ")}))
-
-	case "cdp-type":
-		requireArgs(rest, 1, "cdp-type <text>")
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_type_text", map[string]any{"text": strings.Join(rest, " ")}))
-
-	case "cdp-key":
-		requireArgs(rest, 1, "cdp-key <key>")
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_press_key", map[string]any{"key": rest[0]}))
+	case "cdp-open":
+		requireArgs(rest, 1, "cdp-open <port> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		if match == "" { match = "" }
+		client, target, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		fmt.Printf("Connected to: %s\n  URL: %s\n", target.Title, target.URL)
+		title, _ := client.Eval("document.title")
+		fmt.Printf("  document.title: %s\n", title)
 
 	case "cdp-eval":
-		requireArgs(rest, 1, "cdp-eval <js>")
-		c := startNdmcp()
-		defer c.Close()
-		printTool(c.Call("cdp_evaluate_script", map[string]any{"function": strings.Join(rest, " ")}))
+		requireArgs(rest, 2, "cdp-eval <port> <js> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		pos := stripFlags(rest)
+		js := strings.Join(pos[1:], " ")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		result, err := client.Eval(js)
+		fatal(err)
+		fmt.Println(result)
+
+	case "cdp-nav":
+		requireArgs(rest, 2, "cdp-nav <port> <url> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		fatal(client.Navigate(rest[1]))
+		fmt.Println("Navigated to", rest[1])
+
+	case "cdp-click":
+		requireArgs(rest, 2, "cdp-click <port> <selector> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		fatal(client.ClickSelector(rest[1]))
+		fmt.Println("Clicked", rest[1])
+
+	case "cdp-fill":
+		requireArgs(rest, 3, "cdp-fill <port> <selector> <value> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		fatal(client.Fill(rest[1], strings.Join(rest[2:], " ")))
+		fmt.Println("Filled", rest[1])
+
+	case "cdp-type":
+		requireArgs(rest, 2, "cdp-type <port> <text> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		fatal(client.Type(strings.Join(rest[1:], " ")))
+		fmt.Println("Typed")
+
+	case "cdp-key":
+		requireArgs(rest, 2, "cdp-key <port> <key> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		fatal(client.PressKey(rest[1]))
+		fmt.Println("Pressed", rest[1])
+
+	case "cdp-screenshot":
+		requireArgs(rest, 1, "cdp-screenshot <port> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		data, err := client.Screenshot()
+		fatal(err)
+		fmt.Printf("[screenshot: %d bytes base64]\n", len(data))
+
+	case "cdp-snap":
+		requireArgs(rest, 1, "cdp-snap <port> [--page MATCH]")
+		port, _ := strconv.Atoi(rest[0])
+		match := flag(rest, "--page")
+		client, _, err := cdpPkg.ConnectToApp(port, match)
+		fatal(err)
+		defer client.Close()
+		snap, err := client.Snapshot()
+		fatal(err)
+		fmt.Println(snap)
 
 	// ── Background native (PostMessage, no mouse, no focus) ──
 	case "bg-target":
@@ -424,6 +473,19 @@ func flag(args []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// stripFlags removes --flag value pairs from args, returns remaining positional args.
+func stripFlags(args []string) []string {
+	var result []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--") && i+1 < len(args) {
+			i++ // skip flag value
+		} else {
+			result = append(result, args[i])
+		}
+	}
+	return result
 }
 
 func requireArgs(args []string, n int, usage string) {
